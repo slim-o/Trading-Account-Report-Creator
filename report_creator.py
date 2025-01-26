@@ -5,22 +5,7 @@ import MetaTrader5 as mt5
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from weasyprint import HTML
-
-def filter_dataframe(result_df, symbol=None, comment=None, trade_type=None, magic=None):
-    filtered_df = result_df.copy()
-
-    if symbol:
-        filtered_df = filtered_df[filtered_df['symbol'] == symbol]
-    if comment:
-        filtered_df = filtered_df[filtered_df['comment'].str.contains(comment, na=False)]
-    if trade_type is not None:
-        filtered_df = filtered_df[filtered_df['type'] == trade_type]
-    if magic:
-        filtered_df = filtered_df[filtered_df['magic'] == magic]
-
-    return filtered_df
-
+import pdfkit
 
 pd.set_option('display.max_columns', 500)  # number of columns to be displayed
 pd.set_option('display.width', 20000)     # max table width to display
@@ -122,7 +107,7 @@ def filter_dataframe(result_df, symbol=None, comment=None, trade_type=None, magi
     extra_text = f"{extra_text.strip()}_" if extra_text else ''  # Format extra_text
     return filtered_df
 
-filtered_by_symbol = filter_dataframe(result_df, symbol='GBPUSD-VIP', comment=None, trade_type=None, magic=None)
+filtered_by_symbol = filter_dataframe(result_df, symbol=None, comment=None, trade_type=None, magic=None)
 
 result_df = filtered_by_symbol
 # Calculate totals for swap, commission, and profit
@@ -696,12 +681,14 @@ def generate_html(df):
     html_content = f"""
     <html>
     <head>
+        <meta charset="UTF-8">
+
         <title>{document_title}</title>
         <style>
             body {{
                 font-family: Arial, sans-serif;
-                margin: 10px; /* Reduced margin */
-                line-height: 1.4; /* Slightly tighter line height */
+                margin: 10px;
+                line-height: 1.4;
                 background-color: #f9f9f9;
                 color: #333;
             }}
@@ -712,37 +699,38 @@ def generate_html(df):
             }}
 
             h1 {{
-                font-size: 1.8rem; /* Reduced font size */
-                margin-bottom: 8px; /* Slightly reduced margin */
+                font-size: 1.8rem;
+                margin-bottom: 8px;
             }}
 
             h3 {{
-                font-size: 1.1rem; /* Reduced font size */
-                margin: 4px 0; /* Slightly reduced margin */
+                font-size: 1.1rem;
+                margin: 4px 0;
             }}
 
             .container {{
-                max-width: 1000px; /* Reduced width for better PDF layout */
+                max-width: 1000px;
                 margin: 0 auto;
-                padding: 15px; /* Reduced padding */
+                padding: 15px;
             }}
 
             table {{
                 border-collapse: collapse;
                 width: 100%;
-                margin: 15px 0; /* Reduced margin */
+                margin: 15px 0;
                 background-color: #fff;
                 box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
                 table-layout: fixed;
             }}
 
             th, td {{
-                padding: 8px; /* Reduced padding */
+                padding: 5px; /* Reduced padding for more space */
                 text-align: right;
                 border: 1px solid #ddd;
-                overflow: hidden; /* Prevents overflow in cells */
-                text-overflow: ellipsis; /* Adds ellipsis if text is too long */
-                white-space: nowrap; /* Prevents text from wrapping in cells */
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: normal; /* Allow wrapping inside cells */
+                word-wrap: break-word; /* Break long words to fit inside cells */
             }}
 
             th {{
@@ -764,8 +752,8 @@ def generate_html(df):
 
             img {{
                 display: block;
-                margin: 15px auto; /* Reduced margin */
-                max-width: 40%; /* Slightly smaller image */
+                margin: 15px auto;
+                max-width: 40%;
                 height: auto;
             }}
 
@@ -775,14 +763,16 @@ def generate_html(df):
                 }}
 
                 h1 {{
-                    font-size: 1.4rem; /* Further reduce font size on smaller screens */
+                    font-size: 1.4rem;
                 }}
 
                 h3 {{
-                    font-size: 0.9rem; /* Further reduce font size on smaller screens */
+                    font-size: 0.9rem;
                 }}
             }}
         </style>
+
+
 
     </head>
     <body>
@@ -803,15 +793,15 @@ def generate_html(df):
                     <th>Volume</th>
                     <th>Type</th>
                     <th>Magic</th>
-                    <th>Swap</th>
-                    <th>Commission</th>
-                    <th>Profit</th>
-                    <th>Balance</th>
+                    <th>Swap (£)</th>
+                    <th>Commission (£)</th>
+                    <th>Profit (£)</th>
+                    <th>Balance (£)</th>
                     <th>Comment</th>
                     <th>Trade Duration (mins)</th>
-                    <th>Max Profit </th>
+                    <th>Max Profit (£)</th>
                     <th>Time In Profit (mins)</th>
-                    <th>Profit/s</th>
+                    <th>Profit / S</th>
                 </tr>
             </thead>
             <tbody>
@@ -958,7 +948,18 @@ html_report = generate_html(new_df)
 with open(html_file_name, "w", encoding="utf-8") as file:
     file.write(html_report)
 
-print(f"HTML report generated successfully: {html_file_name}")
+#print(f"HTML report generated successfully: {html_file_name}")
+
+# Save as PDF
+#time.sleep(2)
+path_to_wkhtmltopdf = r'C:/Program Files/wkhtmltopdf/bin/wkhtmltopdf.exe'  # Use raw string or forward slashes
+config = pdfkit.configuration(wkhtmltopdf=path_to_wkhtmltopdf)
+
+options = {
+    'page-size': 'A3',
+    'enable-local-file-access': ''  # Allow access to local files like images
+}
+pdfkit.from_file(html_file_name, f'{html_file_name}.pdf', options=options, configuration=config)
 
 #time.sleep(5)
 # Convert the HTML to a PDF
