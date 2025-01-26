@@ -5,6 +5,7 @@ import MetaTrader5 as mt5
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+from weasyprint import HTML
 
 def filter_dataframe(result_df, symbol=None, comment=None, trade_type=None, magic=None):
     filtered_df = result_df.copy()
@@ -97,21 +98,31 @@ for position_id in df['position_id'].unique():
 # Convert aggregated data to a DataFrame
 result_df = pd.DataFrame(output_data)
 
+extra_text = ''
+
 def filter_dataframe(result_df, symbol=None, comment=None, trade_type=None, magic=None):
+    global extra_text  # Declare to modify the global variable
+    extra_text = ''  # Reset the global variable at the start of the function
+    
     filtered_df = result_df.copy()
 
     if symbol:
         filtered_df = filtered_df[filtered_df['symbol'] == symbol]
+        extra_text += f'{symbol} '
     if comment:
         filtered_df = filtered_df[filtered_df['comment'].str.contains(comment, na=False)]
+        extra_text += f'{comment} '
     if trade_type is not None:
         filtered_df = filtered_df[filtered_df['type'] == trade_type]
+        extra_text += f'{trade_type} '
     if magic:
         filtered_df = filtered_df[filtered_df['magic'] == magic]
-
+        extra_text += f'{magic} '
+    
+    extra_text = f"{extra_text.strip()}_" if extra_text else ''  # Format extra_text
     return filtered_df
 
-filtered_by_symbol = filter_dataframe(result_df, symbol='EURUSD-VIP', comment=None, trade_type=None, magic=1)
+filtered_by_symbol = filter_dataframe(result_df, symbol='GBPUSD-VIP', comment=None, trade_type=None, magic=None)
 
 result_df = filtered_by_symbol
 # Calculate totals for swap, commission, and profit
@@ -125,11 +136,11 @@ totals = {
     'volume': '',
     'type': '',
     'magic': '',
-    'swap': result_df['swap'].sum(),
-    'commission': result_df['commission'].sum(),
+    'swap': round((result_df['swap'].sum()), 2),
+    'commission': round((result_df['commission'].sum()), 2),
     # Exclude rows with type == 2 from total profit
-    'profit': result_df[result_df['type'] != 2]['profit'].sum(),
-    'balance': result_df['swap'].sum() + result_df['commission'].sum() + result_df['profit'].sum(),
+    'profit': round((result_df[result_df['type'] != 2]['profit'].sum()), 2),
+    'balance': round((result_df['swap'].sum() + result_df['commission'].sum() + result_df['profit'].sum()), 2),
     'comment': '',
     'trade_duration': '',  # Not relevant for totals
     'max_profit': '',
@@ -215,7 +226,7 @@ result_df['profit_per_second'] = (result_df['max_profit'] / result_df['trade_dur
 # Display the formatted DataFrame
 #print(result_df)
 new_df = pd.concat([result_df, totals_df], ignore_index=True)
-print(new_df)
+#print(new_df)
 
 ################ WIN RATE ################
 
@@ -431,6 +442,8 @@ for profit in new_df['profit']:
         # Reset the losses counter
         current_losses_count = 0
         current_losses_value = 0.0
+
+        
         
         # Update the maximum consecutive wins count and value
         if current_wins_count > max_consecutive_wins_count:
@@ -449,6 +462,12 @@ for profit in new_df['profit']:
         if current_losses_count > max_consecutive_losses_count:
             max_consecutive_losses_count = current_losses_count
             max_consecutive_losses_value = current_losses_value
+
+    #print(f'consecutive wins: {current_wins_count}')
+    #print(f'consecutive losses: {current_losses_count}')
+    #print(f'max consecutive wins: {max_consecutive_wins_count}')
+    #print(f'max consecutive losses: {max_consecutive_losses_count}')
+
 
 # Print the results (in GBP for wins and USD for losses)
 '''
@@ -622,29 +641,19 @@ print("Average Trade Duration (Minutes): {:.2f}".format(average_trade_duration /
 # Generate timestamp for file names
 timestamp = time.strftime("%Y%m%d_%H%M%S")
 account_name = account_info[24].replace(" ", "_")
-html_file_name = f"Trading_Report_{account_name}_{timestamp}.html"
-png_file_name = f"Balance_Graph_{account_name}_{timestamp}.png"
-document_title = f"Trading Report for {account_name} - {timestamp}"
+html_file_name = f"Acct_Rprt_{account_info[0]}_{extra_text}{timestamp}.html"
+png_file_name = f"Balance_Graph_{account_info[0]}_{timestamp}.png"
+document_title = f"Trading Report for {account_info[0]} - {extra_text} - {timestamp}"
 
 # Function to generate HTML report
 def generate_html(df):
-    # Calculate totals
-    '''
-    total_commission = df['commission'].sum()
-    total_swap = df['swap'].sum()
-    total_fee = df['fee'].sum()
-    total_profit = df['profit'].sum()
-    gross_profit = df[df['profit'] > 0]['profit'].sum()
-    gross_loss = df[df['profit'] < 0]['profit'].sum()
-    final_balance = df['balance'].iloc[-1] if 'balance' in df.columns else total_commission + total_swap + total_fee + total_profit
-    '''
-    
+       
     ############################################
     plt.figure(figsize=(10, 6))
     plt.plot(df['entry_time'], df['balance'], linestyle='-', color='b', linewidth=2)
 
     # Adding titles and labels
-    plt.title(f'Balance over Time for {account_name}', fontsize=16, weight='bold')
+    plt.title(f'Balance over Time for {account_info[0]}', fontsize=16, weight='bold')
     plt.xlabel('Date', fontsize=12)
     plt.ylabel('Balance', fontsize=12)
 
@@ -778,7 +787,6 @@ def generate_html(df):
     </head>
     <body>
         <h1>Trading Report</h1>
-        <h3>Name: {account_info[24]}</h3>
         <h3>Account: {account_info[0]}</h3>
         <h3>Company: {account_info[27]}</h3>
         <h3>Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</h3>
@@ -800,10 +808,10 @@ def generate_html(df):
                     <th>Profit</th>
                     <th>Balance</th>
                     <th>Comment</th>
-                    <th>Trade Duration</th>
-                    <th>Max Profit</th>
-                    <th>Time In Profit</th>
-                    <th>Profit /S</th>
+                    <th>Trade Duration (mins)</th>
+                    <th>Max Profit </th>
+                    <th>Time In Profit (mins)</th>
+                    <th>Profit/s</th>
                 </tr>
             </thead>
             <tbody>
@@ -842,19 +850,72 @@ def generate_html(df):
             <tr>
                 <td>Total Net Profit:</td>
                 <td>{result_df[result_df['type'] != 2]['profit'].sum():.2f}</td>
+                <td>Profit Factor:</td>
+                <td>{profit_factor:.2f}</td>
+                <td>Recovery Factor:</td>
+                <td>{recovery_factor:.2f}</td>
+            </tr>
+            <tr>
+                <td>Gross Profit:</td>
+                <td>{gross_profit:.2f}</td>
+                <td>Expected Payoff:</td>
+                <td>{expected_payout:.2f}</td>
+                <td>Sharpe Ratio:</td>
+                <td>{sharpe_ratio:.2f}</td>
+            </tr>
+            <tr>
+                <td>Gross Loss:</td>
+                <td>{gross_loss:.2f}</td>
                 <td>Win Rate:</td>
                 <td>{win_rate:.2f}%</td>
                 <td>Average RRR:</td>
                 <td>{rrr:.2f}</td>
             </tr>
+        </table>
+
+
+        <table class="summary-table">
             <tr>
+                <td>Total Trades:</td>
+                <td>{len(result_df)}</td>
                 <td>Short Trades (won %):</td>
                 <td>{short_wins} ({short_win_percentage:.2f}%)</td>
                 <td>Profit Trades (% of total):</td>
                 <td>{total_profitable_trades} ({profit_trade_percent:.2f}%)</td>
                 <td>Largest profit trade:</td>
-                <td>{largest_profit}</td>
+                <td>{largest_profit:.2f}</td>
             </tr>
+            <tr>
+                <td>Average profit trade:</td>
+                <td>{average_profit:.2f}</td>
+                <td>Maximum consecutive wins (£):</td>
+                <td>{max_consecutive_wins_count} ({max_consecutive_wins_value:.2f})</td>
+                <td>Maximal consecutive profit (count):</td>
+                <td>{max_consecutive_profit_count} ({max_consecutive_profit_value:.2f})</td>
+                <td>Average consecutive wins:</td>
+                <td>{average_consecutive_wins:.2f}</td>
+            </tr>
+            <tr>
+                <td>Long Trades (won %):</td>
+                <td>{long_wins} ({long_win_percentage:.2f}%)</td>
+                <td>Loss Trades (% of total):</td>
+                <td>{total_loss_trades} ({loss_trade_percent:.2f}%)</td>
+                <td>Largest loss trade:</td>
+                <td>{largest_loss:.2f}</td>
+                <td>Average loss trade:</td>
+                <td>{average_loss:.2f}</td>
+            </tr>
+            <tr>
+                <td>Maximum consecutive losses (£):</td>
+                <td>{max_consecutive_losses_count} ({max_consecutive_losses_value:.2f})</td>
+                <td>Maximal consecutive loss (count):</td>
+                <td>{max_consecutive_loss_count} ({max_consecutive_loss_value:.2f})</td>
+                <td>Average consecutive losses:</td>
+                <td>{average_consecutive_losses:.2f}</td>
+                <td></td>
+                <td></td>
+            </tr>
+
         </table>
 
         <table class="summary-table">
@@ -898,3 +959,10 @@ with open(html_file_name, "w", encoding="utf-8") as file:
     file.write(html_report)
 
 print(f"HTML report generated successfully: {html_file_name}")
+
+#time.sleep(5)
+# Convert the HTML to a PDF
+#pdf_file_name = "trading_report.pdf"
+#HTML(string=html_report).write_pdf(pdf_file_name)
+
+#print(f"PDF report generated successfully: {pdf_file_name}")
