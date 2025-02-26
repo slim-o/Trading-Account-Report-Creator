@@ -8,6 +8,7 @@ import numpy as np
 import pdfkit
 import argparse
 import os
+import math
 
 
 pd.set_option('display.max_columns', 500)  # number of columns to be displayed
@@ -44,6 +45,7 @@ df = pd.DataFrame(list(position_deals), columns=position_deals[0]._asdict().keys
 df['time'] = pd.to_datetime(df['time'], unit='s')
 #print(position_deals)
 #print(df)
+starting_balance = (position_deals[0][13])
 
 # Group by position_id and calculate entry and closing prices
 output_data = []
@@ -94,12 +96,13 @@ def parse_arguments():
     parser.add_argument("--symbol", type=str, help="Filter by symbol (e.g., EURUSD)", required=True)
     parser.add_argument("--trade_type", type=int, help="Filter by trade type: 0 for buys, 1 for sells", choices=[0, 1], required=False)
     parser.add_argument("--comment", type=str, help="Filter by comment (e.g., V4.1_T1_daily)", required=False)
-    
+    parser.add_argument('--weekday', type=str, help='Filter trades by weekday (e.g., Monday, Tuesday).')
+
     # Parse the arguments
     args = parser.parse_args()
     return args
 
-def get_output_directory(base_dir, symbol, trade_type=None, comment=None):
+def get_output_directory(base_dir, symbol, trade_type=None, comment=None, weekday=None):
     dir_path = os.path.join(base_dir, symbol)
     if trade_type == 0:
         dir_path = os.path.join(dir_path, "Buys")
@@ -107,13 +110,16 @@ def get_output_directory(base_dir, symbol, trade_type=None, comment=None):
         dir_path = os.path.join(dir_path, "Sells")
     elif comment:
         dir_path = os.path.join(dir_path, "Thirds")
+    elif weekday:
+        dir_path = os.path.join(dir_path, weekday)
+
 
     os.makedirs(dir_path, exist_ok=True)
     return dir_path
 
 extra_text = ''
 
-def filter_dataframe(result_df, symbol=None, comment=None, trade_type=None, magic=None):
+def filter_dataframe(result_df, symbol=None, comment=None, trade_type=None, magic=None, weekday=None):
     global extra_text  # Declare to modify the global variable
     extra_text = ''  # Reset the global variable at the start of the function
     
@@ -136,44 +142,35 @@ def filter_dataframe(result_df, symbol=None, comment=None, trade_type=None, magi
     if magic:
         filtered_df = filtered_df[filtered_df['magic'] == magic]
         extra_text += f'{magic} '
+    if weekday:
+        filtered_df = filtered_df[filtered_df['entry_time'].dt.strftime("%A") == weekday]
+        extra_text += f'{weekday} '
     
+    # Recalculate the cumulative balance after filtering
+    filtered_df = filtered_df.sort_values(by='entry_time')  # Ensure chronological order
+    filtered_df['balance'] = (filtered_df['profit'] + filtered_df['swap'] + 
+                              filtered_df['commission']).cumsum()  # Compute cumulative sum
+
+
     extra_text = f"{extra_text.strip()}_" if extra_text else ''  # Format extra_text
     return filtered_df
 
 args = parse_arguments()
-filtered_by_symbol = filter_dataframe(result_df, symbol=args.symbol, comment=args.comment, trade_type=args.trade_type, magic=None)
+filtered_by_symbol = filter_dataframe(result_df, symbol=args.symbol, comment=args.comment, trade_type=args.trade_type, magic=None, weekday=args.weekday)
 base_directory = f"LUCI Report {from_date.strftime('%Y-%m-%d')} - {to_date.strftime('%Y-%m-%d')}"
 output_directory = get_output_directory(
     base_directory, 
     symbol=args.symbol, 
     trade_type=args.trade_type, 
-    comment=args.comment
+    comment=args.comment,
+    weekday=args.weekday
+
 )
 
 result_df = filtered_by_symbol
-# Calculate totals for swap, commission, and profit
-totals = {
-    'position_id': 'TOTAL',
-    'symbol': '',
-    'entry_time': '',
-    'closing_time': '',
-    'entry_price': '',
-    'closing_price': '',
-    'volume': '',
-    'type': '',
-    'magic': '',
-    'swap': round((result_df['swap'].sum()), 2),
-    'commission': round((result_df['commission'].sum()), 2),
-    # Exclude rows with type == 2 from total profit
-    'profit': round((result_df[result_df['type'] != 2]['profit'].sum()), 2),
-    'balance': round((result_df['swap'].sum() + result_df['commission'].sum() + result_df['profit'].sum()), 2),
-    'comment': '',
-    'trade_duration': '',  # Not relevant for totals
-    'max_profit': '',
-    'time_in_profit': '',
-    'profit_per_second': ''
-}
+
 #print(result_df)
+
 for index, row in result_df.iterrows():
     if row['type'] >= 2:
         continue
@@ -185,17 +182,40 @@ for index, row in result_df.iterrows():
     closing_price = row['closing_price']
     trade_type = row['type']  # 0 for buy, 1 for sell
     trade_volume = row['volume']
+
+    profit_mins = 0
+    drawdown_mins = 0
     
     # Retry initialisation and fetch price data
     retryable_initialize(3, 5, terminal_path)
     price_data = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, entry_time, close_time)  # Fetch price data
     symbol_info = mt5.symbol_info(symbol)
     
+    for i in price_data:
+        if trade_type == 0:
+            if i[1] >= entry_price:
+                profit_mins += 1
+            elif i[1] < entry_price:
+                drawdown_mins += 1
+            else:
+                drawdown_mins += 1
+        elif trade_type == 1:
+            if i[1] < entry_price:
+                profit_mins += 1
+            elif i[1] > entry_price:
+                drawdown_mins += 1
+            else:
+                drawdown_mins += 1
+    
+    #print(f'Mins in Profit: {profit_mins}')
+    #print(f'Mins in drawdown: {drawdown_mins}')
+
     # Check if symbol_info is valid
     if not symbol_info:
         print(f"Error: Could not retrieve symbol info for {symbol}")
         continue
     
+
     # Extract necessary information from symbol_info
     tick_value = float(symbol_info.trade_tick_value)
     tick_size = float(symbol_info.trade_tick_size)
@@ -222,13 +242,38 @@ for index, row in result_df.iterrows():
     # Store the results in the DataFrame
     result_df.at[index, 'max_profit'] = max_profit
     result_df.at[index, 'time_in_profit'] = time_in_profit
+    result_df.at[index, 'profit_time'] = profit_mins
+    result_df.at[index, 'drawdown_time'] = drawdown_mins
     result_df.at[index, 'trade_duration'] = trade_duration
 
 
+# Calculate totals for swap, commission, and profit
+totals = {
+    'position_id': 'TOTAL',
+    'symbol': '',
+    'entry_time': '',
+    'closing_time': '',
+    'entry_price': '',
+    'closing_price': '',
+    'volume': '',
+    'type': '',
+    'magic': '',
+    'swap': round((result_df['swap'].sum()), 2),
+    'commission': round((result_df['commission'].sum()), 2),
+    # Exclude rows with type == 2 from total profit
+    'profit': round((result_df[result_df['type'] != 2]['profit'].sum()), 2),
+    'balance': round((result_df['swap'].sum() + result_df['commission'].sum() + result_df['profit'].sum()), 2),
+    'comment': '',
+    'trade_duration': '',  # Not relevant for totals
+    'max_profit': '',
+    'time_in_profit': '',
+    'profit_time': result_df['profit_time'].sum(),
+    'drawdown_time': result_df['drawdown_time'].sum(),
+    'profit_per_second': ''
+}
 
 # Append totals to the DataFrame
 totals_df = pd.DataFrame([totals])
-
 
 
 # Display the final DataFrame
@@ -254,13 +299,13 @@ result_df['profit_per_second'] = (result_df['max_profit'] / result_df['trade_dur
 new_df = pd.concat([result_df, totals_df], ignore_index=True)
 #print(new_df)
 
-################ WIN RATE ################
+########### GROSS PROFIT/LOSS #################
 
-total_positions = len(result_df)
-winning_positions = result_df[result_df['profit'] > 0].shape[0]
-win_rate = (winning_positions / total_positions) * 100 if total_positions > 0 else 0
-#print(f"Win Rate: {win_rate:.2f}%")
-pass
+gross_profit = result_df[result_df['type'] != 2][result_df['profit'] >= 0]['profit'].sum()
+
+# Calculate Gross Loss (absolute sum of negative profits)
+gross_loss = abs(result_df[result_df['type'] != 2][result_df['profit'] < 0]['profit'].sum())
+
 
 ################ AVERAGE RRR ################
 
@@ -283,9 +328,6 @@ else:
 
 ################ PROFIT FACTOR ################
 
-gross_profit = profitable_trades['profit'].sum() if len(profitable_trades) > 0 else 0
-gross_loss = losing_trades['profit'].sum() if len(losing_trades) > 0 else 0
-
 if gross_loss != 0:
     profit_factor = gross_profit / abs(gross_loss)
 else:
@@ -299,22 +341,94 @@ else:
 
 ################ SHARPE RATIO ################
 
-risk_free_rate = 0.02 / 252  # Daily risk-free rate (assuming 2% annual return)
+
 filtered_df = result_df[(result_df['volume'] > 0) & (result_df['profit'].notna())]
-daily_returns = filtered_df['profit'] / filtered_df['volume']
+filtered_df['entry_time'] = pd.to_datetime(filtered_df['entry_time'])
+filtered_df['entry_date'] = filtered_df['entry_time'].dt.date
+
+# Filter the data
+filtered_df = result_df[(result_df['volume'] > 0) & (result_df['profit'].notna())]
+filtered_df['entry_time'] = pd.to_datetime(filtered_df['entry_time'])
+filtered_df['entry_date'] = filtered_df['entry_time'].dt.date
+
+# Group by entry_date and calculate total profit per day
+daily_profit = filtered_df.groupby('entry_date')['profit'].sum().reset_index()
+
+# Calculate daily balance (assuming a starting balance of 10,000)
+
+daily_profit['balance'] = starting_balance + daily_profit['profit'].cumsum()
+
+# Calculate percentage increase from previous day
+daily_profit['pct_increase'] = daily_profit['balance'].pct_change()
+daily_profit['pct_increase'] = daily_profit['pct_increase'].fillna(0)  # Handle NaN values
+
+# Group by entry_date and aggregate
+collated_df = filtered_df.groupby('entry_date').agg({
+    'position_id': 'count',  # Number of trades per day
+    'profit': 'sum',         # Total profit per day
+    'volume': 'sum',         # Total volume traded per day
+    'swap': 'sum',           # Total swap per day
+    'commission': 'sum',     # Total commission per day
+    'trade_duration': 'mean',  # Average trade duration per day
+    'max_profit': 'max',     # Maximum profit per day
+    'time_in_profit': 'sum', # Total time in profit per day
+    'profit_time': 'sum',    # Total profit time per day
+    'drawdown_time': 'sum',  # Total drawdown time per day
+    'profit_per_second': 'mean'  # Average profit per second per day
+}).reset_index()
+
+# Merge this data back into the collated_df
+collated_df = pd.merge(collated_df, daily_profit[['entry_date', 'pct_increase']], on='entry_date', how='left')
+
+# Rename columns for clarity
+collated_df = collated_df.rename(columns={'position_id': 'num_trades'})
+
+# Format percentage increase to two decimal places
+collated_df['pct_increase'] = collated_df['pct_increase']
+
+
+# Display the final DataFrame
+#print(collated_df)
+
+daily_returns = collated_df['profit']
 mean_daily_return = daily_returns.mean()
+#print(mean_daily_return)
+
+total_squared_deviation = 0
+for value in collated_df['profit']:
+    squared_deviation = (value - mean_daily_return)**2
+    #print(squared_deviation)
+    total_squared_deviation += squared_deviation
+
+variance = total_squared_deviation/len(collated_df)
+
+#print(filtered_df.iloc[0])
+
+
+#print(daily_returns.sum())
+#print(len(daily_returns))
+
+#print(mean_daily_return)
+#print(std_dev_daily_return)
+
+portfolio_return = daily_returns.sum() / len(daily_returns)
+risk_free_rate = 0.045 / 252
+standard_deviation = math.sqrt(variance)
+
+#print(f'Portfolo Return: {portfolio_return}')
+#print(f'Risk Free Rate: {risk_free_rate}')
+#print(f'Standard Deviation: {standard_deviation}')
+
+
+sharpe_ratio = (portfolio_return - risk_free_rate)/ standard_deviation
+annualised_sharpe_ratio = sharpe_ratio * math.sqrt(252)
+
+#print(f'Sharpe Ratio: {sharpe_ratio}')
+#print(f'Annualised Sharpe Ratio: {annualised_sharpe_ratio}')
+
+
 std_dev_daily_return = daily_returns.std()
 
-if std_dev_daily_return != 0:
-    sharpe_ratio = (mean_daily_return - risk_free_rate) / std_dev_daily_return
-else:
-    sharpe_ratio = None
-
-if sharpe_ratio is not None:
-    #print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
-    pass
-else:
-    print("Sharpe Ratio could not be calculated (no variability in returns).")
 
 ################ RECOVERY FACTOR ##################
 
@@ -340,18 +454,14 @@ if recovery_factor is not None:
 else:
     print("Recovery Factor could not be calculated (no drawdown).")
 
-########### GROSS PROFIT/LOSS #################
 
-gross_profit = result_df[result_df['type'] != 2][result_df['profit'] > 0]['profit'].sum()
-
-# Calculate Gross Loss (absolute sum of negative profits)
-gross_loss = abs(result_df[result_df['type'] != 2][result_df['profit'] < 0]['profit'].sum())
 
 ########### EXPECTED PAYOUT ###################
 
 total_net_profit = result_df[result_df['type'] != 2]['profit'].sum()
 
 total_trades = len(result_df)
+
 
 # Calculate Expected Payout
 if total_trades > 0:
@@ -370,6 +480,7 @@ else:
 
 # Assuming `balance` column exists in the DataFrame
 initial_balance = new_df['balance'].iloc[0]  # First balance (initial deposit)
+#initial_balance = starting_balance
 #print(initial_balance)
 running_max = new_df['balance'].cummax()    # Running peak balance
 #print(running_max)
@@ -404,15 +515,17 @@ else:
 # Filter buy (long) and sell (short) trades
 long_trades = new_df[new_df['type'] == 0]  # Buy (long) trades
 short_trades = new_df[new_df['type'] == 1]  # Sell (short) trades
-#print(len(long_trades))
-#print(len(short_trades))
+print(len(long_trades))
+print(len(short_trades))
 
 # Calculate winning long trades (long trades are won when closing_price > entry_price)
-long_wins = len(long_trades[long_trades['closing_price'] > long_trades['entry_price']])
+long_wins = len(long_trades[long_trades['profit'] >= 0 ])
+long_loss = len(long_trades) - long_wins
 long_win_percentage = (long_wins) / len(long_trades) * 100 if len(long_trades) > 0 else 0
 
 # Calculate winning short trades (short trades are won when closing_price < entry_price)
-short_wins = len(short_trades[short_trades['closing_price'] < short_trades['entry_price']])
+short_wins = len(short_trades[short_trades['profit'] >= 0 ])
+short_loss = len(short_trades) - short_wins
 short_win_percentage = (short_wins) / len(short_trades) * 100 if len(short_trades) > 0 else 0
 
 # Print the results
@@ -435,8 +548,10 @@ largest_loss = new_df[new_df['type'] != 2]['profit'].min()
 
 ################## AVERAGE PROFIT/LOSS ######################
 
-profitable_trades = new_df[new_df['type'] != 2][new_df['profit'] > 0]
+profitable_trades = new_df[new_df['type'] != 2][new_df['profit'] >= 0]
 losing_trades = new_df[new_df['type'] != 2][new_df['profit'] < 0]
+
+
 
 # Calculate the average profit and average loss
 average_profit = profitable_trades['profit'].mean() if len(profitable_trades) > 0 else 0
@@ -461,7 +576,7 @@ current_losses_value = 0.0
 
 # Iterate over the 'profit' column to track consecutive wins and losses
 for profit in new_df['profit']:
-    if profit > 0:  # Win
+    if profit >= 0:  # Win
         current_wins_count += 1  # Increment the win count
         current_wins_value += profit  # Accumulate the profit value of consecutive wins
         
@@ -521,47 +636,98 @@ total_losses_count = 0
 total_wins_streaks = 0
 total_losses_streaks = 0
 
+win_streaks = []
+loss_streaks = []
+win_streaks_value = []
+loss_streaks_value = []
 # Iterate over the profit values
 for profit in new_df[new_df['type'] != 2]['profit']:
     if profit > 0:  # Win
-        current_wins_count += 1  # Increment the win count
-        current_wins_value += profit  # Add to the win value
+        current_wins_count += 1
+        current_wins_value += profit
 
-        # Reset losses
-        current_losses_count = 0
-        current_losses_value = 0.0
-        
-        # Track the maximal consecutive wins
+        # Reset losses if there was a loss streak
+        if current_losses_count > 1:
+            loss_streaks.append(current_losses_count)
+            loss_streaks_value.append(current_losses_value)
+            total_losses_streaks += 1
+            total_losses_count += current_losses_count
+            current_losses_count = 0
+            current_losses_value = 0.0
+
+        # Track maximal consecutive wins
         if current_wins_count > max_consecutive_profit_count:
             max_consecutive_profit_count = current_wins_count
             max_consecutive_profit_value = current_wins_value
 
-        # Update averages
-        total_wins_streaks += 1
-        total_wins_count += current_wins_count
-        current_wins_count = 0  # Reset after each win streak
-
     elif profit < 0:  # Loss
-        current_losses_count += 1  # Increment the loss count
-        current_losses_value += profit  # Add to the loss value
+        current_losses_count += 1
+        current_losses_value += profit
 
-        # Reset wins
-        current_wins_count = 0
-        current_wins_value = 0.0
+        # Reset wins if there was a win streak
+        if current_wins_count > 1:
+            win_streaks.append(current_wins_count)
+            win_streaks_value.append(current_wins_value)
+            total_wins_streaks += 1
+            total_wins_count += current_wins_count
+            current_wins_count = 0
+            current_wins_value = 0.0
 
-        # Track the maximal consecutive losses
+        # Track maximal consecutive losses
         if current_losses_count > max_consecutive_loss_count:
             max_consecutive_loss_count = current_losses_count
             max_consecutive_loss_value = current_losses_value
 
-        # Update averages
-        total_losses_streaks += 1
-        total_losses_count += current_losses_count
-        current_losses_count = 0  # Reset after each loss streak
+# Append any ongoing streak at the end of the loop
+if current_wins_count > 0:
+    win_streaks.append(current_wins_count)
+    win_streaks_value.append(current_wins_value)
+    total_wins_streaks += 1
+    total_wins_count += current_wins_count
 
-# Calculate the averages for consecutive wins and losses
-average_consecutive_wins = total_wins_count / total_wins_streaks if total_wins_streaks > 0 else 0
-average_consecutive_losses = total_losses_count / total_losses_streaks if total_losses_streaks > 0 else 0
+if current_losses_count > 0:
+    loss_streaks.append(current_losses_count)
+    loss_streaks_value.append(current_losses_value)
+    total_losses_streaks += 1
+    total_losses_count += current_losses_count
+
+# Calculate averages (with checks for empty lists)
+avg_win_streak = sum(win_streaks) / len(win_streaks) if win_streaks else 0
+avg_loss_streak = sum(loss_streaks) / len(loss_streaks) if loss_streaks else 0
+
+avg_win_streak_value = sum(win_streaks_value) / len(win_streaks_value) if win_streaks_value else 0
+avg_loss_streak_value = sum(loss_streaks_value) / len(loss_streaks_value) if loss_streaks_value else 0
+max_wins_ind = 0
+max_element = win_streaks[0]
+
+for i in range (1,len(win_streaks)): #iterate over array
+  if win_streaks[i] > max_element: #to check max value
+    max_element = win_streaks[i]
+    max_wins_ind = i
+
+max_loss_ind = 0
+max_low_element = loss_streaks[0]
+
+for i in range (1,len(loss_streaks)): #iterate over array
+  if loss_streaks[i] > max_low_element: #to check max value
+    max_low_element = loss_streaks[i]
+    max_loss_ind = i
+'''
+print("Win streaks:", win_streaks)
+print("Loss streaks:", loss_streaks)
+print("Win streaks (value):", win_streaks_value)
+print("Loss streaks (value):", loss_streaks_value)
+print('')
+print("Average win streak:", avg_win_streak)
+print("Average loss streak:", avg_loss_streak)
+print("Average Win streaks (value):", avg_win_streak_value)
+print("Average Loss streaks (value):", avg_loss_streak_value)
+
+'''
+
+
+average_consecutive_wins = avg_win_streak
+average_consecutive_losses = avg_loss_streak
 
 # Print the results
 '''
@@ -574,7 +740,8 @@ print(f'Average consecutive losses: {average_consecutive_losses:.2f}')
 
 # Calculate average values
 average_max_profit = result_df['max_profit'].mean()  # Average monetary max profit
-average_time_in_profit = result_df['time_in_profit'].mean()  # Average time in profit
+average_time_in_profit = result_df['profit_time'].mean()  # Average time in profit
+average_time_in_drawdown = result_df['drawdown_time'].mean()  # Average time in profit
 average_trade_duration = result_df['trade_duration'].mean()  # Average trade duration in seconds
 
 # Output the averages
@@ -582,8 +749,15 @@ average_trade_duration = result_df['trade_duration'].mean()  # Average trade dur
 #print(f"Average Time in Profit: {average_time_in_profit:.2f} (number of price data points)")
 #print(f"Average Trade Duration: {average_trade_duration:.2f} seconds")
 
+################ WIN RATE ################
+
+win_rate = ((long_wins + short_wins)/((long_wins + short_wins) + (long_loss + short_loss))) * 100
 ########################################
 
+#########
+#########
+#########
+print('')
 print('')
 print(f'Name: {account_info[24]}')
 print(f'Account: {account_info[0]}')
@@ -593,6 +767,7 @@ print('')
 
 print('')
 print(f'Balance: {account_info[10]}')
+print(f'Starting Balance: {starting_balance}')
 print(f'Credit Facility: {account_info[11]}')
 print(f'Floating P/L: {account_info[12]}')
 print(f'Equity: {account_info[13]}')
@@ -602,61 +777,74 @@ print(f'Free Margin: {account_info[15]}')
 print(f'Margin: {account_info[14]}')
 print(f'Margin Level: {account_info[16]}')
 print('')
-
-
+print('')
 print(f"Total Net Profit: {(result_df[result_df['type'] != 2]['profit'].sum()):.2f}")
-print(f'Profit Factor: {profit_factor:.2f}')
-print(f'Recovery Factor: {recovery_factor:.2f}')
-print('')
-
 print(f'Gross Profit: {gross_profit:.2f}')
-print(f'Expected Payoff: {expected_payout:.2f}')
-print(f'Sharpe Ratio: {sharpe_ratio:.2f}')
-print('')
-
 print(f'Gross Loss: {gross_loss:.2f}')
 print('')
 
+
+##########
+##########
+
+# TOTAL TRADES
+print(f'Total Trades: {len(result_df)}')
+print(f'Total Won: {long_wins + short_wins}')
+print(f'Total Lost: {long_loss + short_loss}')
 print(f'Win Rate: {win_rate:.2f}%')
+print('')
+
+print(f'Long Trades Won: {long_wins}')
+print(f'Long Trades Lost: {long_loss}')
+print(f'Short Trades Won: {short_wins}')
+print(f'Short Trades Lost: {short_loss}')
+print('')
+
+
+print(f'Profit Factor: {profit_factor:.2f}')
+print(f'Annualised Sharpe Ratio: {annualised_sharpe_ratio}')
+print(f'Daily Sharpe Ratio: {sharpe_ratio:.2f}')
+print(f'Recovery Factor: {recovery_factor:.2f}')
+print(f'Expected Payoff: {expected_payout:.2f}')
+print('')
+
+#AVERAGE TRADES
 print(f'Average RRR: {rrr:.2f}')
+print(f'Average profit trade: {average_profit:.2f}')
+print(f'Average loss trade: {average_loss:.2f}')
+print("Average win streak:", avg_win_streak)
+print("Average loss streak:", avg_loss_streak)
+print("Average Win streaks (value):", avg_win_streak_value)
+print("Average Loss streaks (value):", avg_loss_streak_value)
 print('')
+print("Average Max Profit (Monetary): £{:.2f}".format(average_max_profit))
+print("Average Time in Profit (Minutes): {:.2f}".format(average_time_in_profit / 60))
+print("Average Time in Drawdown (Minutes): {:.2f}".format(average_time_in_drawdown / 60))
+print("Average Trade Duration (Minutes): {:.2f}".format(average_trade_duration / 60))
 print('')
-print('Balance Drawdown')
+#LARGEST
+print(f'Largest profit trade: {largest_profit}')
+print(f'Largest loss trade: {largest_loss}')
 print('')
+#MAXWINS
+print(f'Max Consecutive Wins: {max_element}')
+print(f'Max Consecutive Wins value: {win_streaks_value[max_wins_ind]}')
+print('')
+
+#MAX
+print(f'Max Consecutive loss: {max_low_element}')
+print(f'Max Consecutive Wins value: {loss_streaks_value[max_loss_ind]}')
+print('')
+#MAXIMAL
+print(f'Maximal consecutive profit (count): {max_consecutive_profit_count} {max_consecutive_profit_value:.2f}')
+print(f'Maximal consecutive loss (count): {max_consecutive_loss_count} {max_consecutive_loss_value:.2f}')
+print('')
+
 print(f'Balance Drawdown Absolute: {drawdown_absolute:.2f}')
 print(f'Balance Drawdown Maximal: {drawdown_maximal:.2f}')
 print(f'Balance Drawdown Relative: {drawdown_relative:.2f}%')
 print('')
 
-print(f'Total Trades: {len(result_df)}')
-print('')
-
-print(f'Short Trades (won %): {long_wins}({long_win_percentage:.2f}%)')
-print(f'Profit Trades (% of total): {total_profitable_trades}({profit_trade_percent:.2f}%)')
-print(f'Largest profit trade: {largest_profit}')
-print(f'Average profit trade: {average_profit:.2f}')
-print(f'Maximum consecutive wins (£): {max_consecutive_wins_count}({max_consecutive_wins_value:.2f})')
-print(f'Maximal consecutive profit (count): {max_consecutive_profit_count} {max_consecutive_profit_value:.2f}')
-print(f'Average consecutive wins: {average_consecutive_wins:.2f}')
-print('')
-
-print('')
-print(f'Long Trades (won %): {short_wins}({short_win_percentage:.2f}%)')
-print(f'Loss Trades (% of total): {total_loss_trades}({loss_trade_percent:.2f}%)')
-print(f'Largest loss trade: {largest_loss}')
-print(f'Average loss trade: {average_loss:.2f}')
-print(f'Maximum consecutive losses (£):	 {max_consecutive_losses_count}({max_consecutive_losses_value:.2f})')
-print(f'Maximal consecutive loss (count): {max_consecutive_loss_count} {max_consecutive_loss_value:.2f}')
-print(f'Average consecutive losses:	{average_consecutive_losses:.2f}')
-print('')
-
-# Format and display
-print("Average Max Profit (Monetary): £{:.2f}".format(average_max_profit))
-print("Average Time in Profit (Minutes): {:.2f}".format(average_time_in_profit / 60))
-print("Average Trade Duration (Minutes): {:.2f}".format(average_trade_duration / 60))
-
-#########
-#########
 #########
 #########
 #########
@@ -713,7 +901,7 @@ def generate_html(df):
             <td>{row['comment']}</td>
             <td>{row['trade_duration']}</td>
             <td>{row['max_profit']}</td>
-            <td>{row['time_in_profit']}</td>
+            <td>{row['profit_time']}</td>
             <td>{row['profit_per_second']}</td>
 
         </tr>
@@ -882,97 +1070,162 @@ def generate_html(df):
             <tr>
                 <td>Total Net Profit:</td>
                 <td>{result_df[result_df['type'] != 2]['profit'].sum():.2f}</td>
-                <td>Profit Factor:</td>
-                <td>{profit_factor:.2f}</td>
-                <td>Recovery Factor:</td>
-                <td>{recovery_factor:.2f}</td>
             </tr>
             <tr>
                 <td>Gross Profit:</td>
                 <td>{gross_profit:.2f}</td>
-                <td>Expected Payoff:</td>
-                <td>{expected_payout:.2f}</td>
-                <td>Sharpe Ratio:</td>
-                <td>{sharpe_ratio:.2f}</td>
             </tr>
             <tr>
                 <td>Gross Loss:</td>
                 <td>{gross_loss:.2f}</td>
-                <td>Win Rate:</td>
-                <td>{win_rate:.2f}%</td>
-                <td>Average RRR:</td>
-                <td>{rrr:.2f}</td>
             </tr>
         </table>
-
 
         <table class="summary-table">
             <tr>
                 <td>Total Trades:</td>
                 <td>{len(result_df)}</td>
-                <td>Short Trades (won %):</td>
-                <td>{short_wins} ({short_win_percentage:.2f}%)</td>
-                <td>Profit Trades (% of total):</td>
-                <td>{total_profitable_trades} ({profit_trade_percent:.2f}%)</td>
-                <td>Largest profit trade:</td>
-                <td>{largest_profit:.2f}</td>
+
+                <td>Long Trades Won:</td>
+                <td>{long_wins}</td>
             </tr>
+            <tr>
+                <td>Total Won:</td>
+                <td>{long_wins + short_wins}</td>
+
+                <td>Long Trades Lost:</td>
+                <td>{long_loss}</td>
+            </tr>
+            <tr>
+                <td>Total Lost:</td>
+                <td>{long_loss + short_loss}</td>
+
+                <td>Short Trades Won:</td>
+                <td>{short_wins}</td>
+            </tr>
+            <tr>
+                <td>Win Rate:</td>
+                <td>{win_rate:.2f}%</td>
+
+                <td>Short Trades Lost:</td>
+                <td>{short_loss}</td>
+            </tr>
+        </table>
+
+        <table class="summary-table">
+            <tr>
+                <td>Largest Profit Trade:</td>
+                <td>{largest_profit:.2f}</td>
+
+                <td>Largest Loss Trade:</td>
+                <td>{largest_loss:.2f}</td>
+            </tr>
+        </table>
+
+        <table class="summary-table">
+            <tr>
+                <td>Profit Factor:</td>
+                <td>{profit_factor:.2f}</td>
+                
+                <td>Annualised Sharpe Ratio:</td>
+                <td>{annualised_sharpe_ratio:.2f}</td>
+                
+            </tr>
+            <tr>
+                <td>Recovery Factor:</td>
+                <td>{recovery_factor:.2f}</td>
+                <td>Daily Sharpe Ratio:</td>
+                <td>{sharpe_ratio:.2f}</td>
+            </tr>
+            <tr>
+                <td>Expected Pay:</td>
+                <td>{expected_payout:.2f}</td>
+                
+            </tr>
+        </table>
+
+        <table class="summary-table">
+            <tr>
+                <td>Average RRR:</td>
+                <td>1:{rrr:.2f}</td>
+
+                <td>Average win streak:</td>
+                <td>{avg_win_streak:.2f} ({avg_win_streak_value:.2f})</td>
+
+            </tr>
+
             <tr>
                 <td>Average profit trade:</td>
                 <td>{average_profit:.2f}</td>
-                <td>Maximum consecutive wins (£):</td>
-                <td>{max_consecutive_wins_count} ({max_consecutive_wins_value:.2f})</td>
-                <td>Maximal consecutive profit (count):</td>
-                <td>{max_consecutive_profit_count} ({max_consecutive_profit_value:.2f})</td>
-                <td>Average consecutive wins:</td>
-                <td>{average_consecutive_wins:.2f}</td>
-            </tr>
-            <tr>
-                <td>Long Trades (won %):</td>
-                <td>{long_wins} ({long_win_percentage:.2f}%)</td>
-                <td>Loss Trades (% of total):</td>
-                <td>{total_loss_trades} ({loss_trade_percent:.2f}%)</td>
-                <td>Largest loss trade:</td>
-                <td>{largest_loss:.2f}</td>
-                <td>Average loss trade:</td>
-                <td>{average_loss:.2f}</td>
-            </tr>
-            <tr>
-                <td>Maximum consecutive losses (£):</td>
-                <td>{max_consecutive_losses_count} ({max_consecutive_losses_value:.2f})</td>
-                <td>Maximal consecutive loss (count):</td>
-                <td>{max_consecutive_loss_count} ({max_consecutive_loss_value:.2f})</td>
-                <td>Average consecutive losses:</td>
-                <td>{average_consecutive_losses:.2f}</td>
-                <td></td>
-                <td></td>
+
+                <td>Average loss streak:</td>
+                <td>{avg_loss_streak:.2f} ({avg_loss_streak_value:.2f})</td>
             </tr>
 
+
+            <tr>
+                <td>Average loss trade:</td>
+                <td>{average_loss:.2f}</td>
+
+                
+            </tr>
+
+
+        </table>
+
+        <table class="summary-table">
+            <tr>
+                <td>Average Max Profit (Monetary):</td>
+                <td>{average_max_profit:.2f}</td>
+
+                <td>Average Trade Duration (Minutes):</td>
+                <td>{(average_trade_duration / 60):.2f}</td>
+
+            </tr>
+            <tr>
+                <td>Average Time in Profit (Minutes):</td>
+                <td>{(average_time_in_profit / 60):.2f}</td>
+
+
+                <td>Average Time in Drawdown (Minutes):</td>
+                <td>{(average_time_in_drawdown / 60):.2f}</td>
+            </tr>
+        </table>
+
+        <table class="summary-table">
+            <tr>
+                <td>Max Consecutive Wins:</td>
+                <td>{max_element} ({(win_streaks_value[max_wins_ind]):.2f})</td>
+
+                <td>Maximal consecutive profit (count):</td>
+                <td>{max_consecutive_profit_count} ({max_consecutive_profit_value:.2f})</td>
+            </tr>
+
+            <tr>
+                <td>Max Consecutive loss:</td>
+                <td>{max_low_element} ({(loss_streaks_value[max_loss_ind]):.2f})</td>
+
+                <td>Maximal consecutive loss (count):</td>
+                <td>{max_consecutive_loss_count} ({max_consecutive_loss_value:.2f})</td>
+            </tr>
         </table>
 
         <table class="summary-table">
             <tr>
                 <td>Balance Drawdown Absolute:</td>
                 <td>{drawdown_absolute:.2f}</td>
-                <td>Balance Drawdown Maximal:</td>
-                <td>{drawdown_maximal:.2f} ({drawdown_relative:.2f}%)</td>
             </tr>
+            <tr>
+                <td>Balance Drawdown Maximal:</td>
+                <td>{drawdown_maximal:.2f}</td>
+            </tr>
+            <tr>
+                <td>Balance Drawdown Relative:</td>
+                <td>{drawdown_relative:.2f}%</td>
+            </tr>
+
         </table>
 
-        <table class="summary-table">
-            <tr>
-                <td>Average Max Profit (Monetary):</td>
-                <td>£{average_max_profit:.2f}</td>
-            </tr>
-            <tr>
-                <td>Average Time in Profit (Minutes):</td>
-                <td>{average_time_in_profit:.2f}</td>
-            </tr>
-            <tr>
-                <td>Average Trade Duration (Minutes):</td>
-                <td>{average_trade_duration:.2f}</td>
-            </tr>
-        </table>
     </body>
     </html>
     """

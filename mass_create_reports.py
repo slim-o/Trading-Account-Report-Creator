@@ -70,9 +70,10 @@ result_df = pd.DataFrame(output_data)
 # Get unique values for symbols and third comments
 unique_symbols = result_df['symbol'].unique()
 third_comments = ['V4.1_T1_daily', 'V4.1_T2_daily', 'V4.1_T3_daily']
+weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 # Function to run report_creator.py for each filter condition
-def run_script(script_path, symbol, trade_type=None, comment=None):
+def run_script(script_path, symbol, trade_type=None, comment=None, weekday=None):
     """
     Run the report_creator.py script with specified arguments.
     """
@@ -81,8 +82,10 @@ def run_script(script_path, symbol, trade_type=None, comment=None):
         args += f' --trade_type {trade_type}'
     if comment:
         args += f' --comment "{comment}"'
+    if weekday:
+        args += f' --weekday "{weekday}"'  # Adding weekday filter
 
-    command = f'start cmd.exe /k python "{script_path}" {args}'
+    command = f'start cmd.exe /c python "{script_path}" {args}'
     subprocess.Popen(command, shell=True)
     time.sleep(1)  # Add a delay to avoid overlapping processes
 
@@ -101,3 +104,18 @@ if __name__ == "__main__":
             run_script('mass_report_creator.py', symbol, comment=comment)
             run_script('mass_report_creator.py', symbol, comment=comment, trade_type=0)
             run_script('mass_report_creator.py', symbol, comment=comment, trade_type=1)
+            
+
+        # Generate reports per weekday
+        for weekday in weekdays:
+            filtered_weekday_df = result_df[result_df['entry_time'].dt.strftime("%A") == weekday]
+            if not filtered_weekday_df.empty:
+                run_script('mass_report_creator.py', symbol, weekday=weekday)  # Run with weekday filter
+                run_script('mass_report_creator.py', symbol, trade_type=0, weekday=weekday)  # Buys on weekday
+                run_script('mass_report_creator.py', symbol, trade_type=1, weekday=weekday)  # Sells on weekday
+                
+                # Weekdays with third comments
+                for comment in third_comments:
+                    run_script('mass_report_creator.py', symbol, comment=comment, weekday=weekday)
+                    run_script('mass_report_creator.py', symbol, comment=comment, trade_type=0, weekday=weekday)
+                    run_script('mass_report_creator.py', symbol, comment=comment, trade_type=1, weekday=weekday)
