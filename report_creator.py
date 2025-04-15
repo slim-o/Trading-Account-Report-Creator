@@ -122,7 +122,7 @@ def filter_dataframe(result_df, symbol=None, comment=None, trade_type=None, magi
     extra_text = f"{extra_text.strip()}_" if extra_text else ''  # Format extra_text
     return filtered_df
 
-filtered_by_symbol = filter_dataframe(result_df, symbol=None, comment=None, trade_type=None, magic=None, weekday='Monday')
+filtered_by_symbol = filter_dataframe(result_df, symbol=None, comment=None, trade_type=None, magic=None, weekday=None)
 
 result_df = filtered_by_symbol
 
@@ -499,7 +499,7 @@ loss_trade_percent = (total_loss_trades) / len(new_df) * 100 if len(new_df) > 0 
 
 ################### LARGEST PROFIT/ LOSS ######################
 
-largest_profit = new_df[new_df['type'] != 2]['profit'].max()
+largest_profit = result_df[result_df['type'] != 2]['profit'].max()
 largest_loss = new_df[new_df['type'] != 2]['profit'].min()
 
 ################## AVERAGE PROFIT/LOSS ######################
