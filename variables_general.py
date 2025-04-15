@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
 import pandas as pd
-import pymongo
 
 timestamp = 0
 #open = 1
