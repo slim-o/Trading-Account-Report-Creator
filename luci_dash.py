@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import MetaTrader5 as mt5
 import pandas as pd
 import math
-from dash import Dash, html, dash_table, dcc, callback, Output, Input, exceptions
+from dash import Dash, html, dash_table, dcc, callback, Output, Input, exceptions, callback_context
 import plotly.express as px
 import dash_bootstrap_components as dbc
 from dash.dependencies import State
@@ -704,21 +704,6 @@ empty_donut = px.pie(
     values='amount', names='type', hole=0.6,
     color_discrete_map={'Gross Profit': '#2ca02c', 'Gross Loss': '#d62728'}
 )
-'''
-profit_df = pd.DataFrame({
-    'type': ['Gross Profit', 'Gross Loss'],
-    'amount': [gross_profit, gross_loss]
-})
-
-# Create donut chart
-fig = px.pie(profit_df, values='amount', names='type', hole=0.6
-            , color_discrete_map={'green': '#2ca02c', 'red': '#d62728'})
-
-# Add net profit annotation
-fig.update_layout(
-    annotations=[dict(text=f'Net Profit: {round((gross_profit - gross_loss), 2)}', x=0.5, y=0, font_size=14, showarrow=False)]
-)
-'''
 
 
 external_stylesheets = [dbc.themes.LUMEN]
@@ -981,8 +966,8 @@ def connect_to_mt5(n_clicks, server, account, password, path):
         Output('sharpe-ratio', 'value'),
         Output('sharpe-ratio', 'label'),
     ],
-    Input('filtered-data-store', 'data'), 
-    State('filter-button', 'n_clicks'),
+    Input('filter-button', 'n_clicks'), 
+    Input('connect-button', 'n_clicks'),
     [
         State('server-input', 'value'),
         State('account-input', 'value'),
@@ -992,12 +977,29 @@ def connect_to_mt5(n_clicks, server, account, password, path):
         State('comment-filter', 'value'),
         State('type-filter', 'value'),
         State('magic-filter', 'value'),
-        State('weekday-filter', 'value')
+        State('weekday-filter', 'value'),
+        State('filtered-data-store', 'data')
     ],
     prevent_initial_call=True
 )
-def apply_filters(n_clicks, current_data, server, account, password, path, symbol, comment, trade_type, magic, weekday):
-    if not mt_connected or n_clicks is None:
+def apply_filters(filter_clicks, connect_clicks, server, account, password, path, 
+                 symbol, comment, trade_type, magic, weekday, current_data):
+    ctx = callback_context
+    
+    if not ctx.triggered:
+        raise exceptions.PreventUpdate
+        
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    # If connect button was clicked, apply no filters (show all data)
+    if trigger_id == 'connect-button':
+        symbol = None
+        comment = None
+        trade_type = None
+        magic = None
+        weekday = None
+
+    if not mt_connected:
         raise exceptions.PreventUpdate
     
     # Convert trade_type to None if 'all' is selected
