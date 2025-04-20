@@ -141,7 +141,7 @@ Key parameters to adjust:
 | "No deals in history" | Adjust date range in code |
 | Chart display issues | Refresh browser cache |
 | Missing dependencies	 | Reinstall requirements.txt
- |
+
 
 Debugging Tips
 1. Check terminal for Python errors
