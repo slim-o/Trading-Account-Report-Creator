@@ -1,22 +1,27 @@
 # Trading Analytics Dashboard
 
-![Dashboard Preview](https://via.placeholder.com/800x400?text=Trading+Analytics+Dashboard+Preview) 
+![Dashboard Example](example.png)
 *Example dashboard interface*
 
 ## Table of Contents
 - [Overview](#overview)
 - [Features](#features)
+  - [Core Functionality](#core-functionality)
+  - [Visualisations](#visualisations)
+  - [Key Metrics](#key-metrics)
 - [Installation](#installation)
   - [Prerequisites](#prerequisites)
   - [Setup](#setup)
 - [Usage](#usage)
-- [Configuration](#configuration)
-- [File Structure](#file-structure)
+- [Code Customisation](#code-customisation)
 - [Technical Details](#technical-details)
+  - [Architecture](#architecture)
+  - [Data Flow](#data-flow)
+  - [Key Dependencies](#key-dependencies)
 - [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+  - [Debugging Tips](#debugging-tips)
 - [Contributing](#contributing)
-- [License](#license)
-- [Support](#support)
 
 ## Overview
 
@@ -130,23 +135,32 @@ Key parameters to adjust:
 ### Troubleshooting
 #### Common Issues
 
-| Attempt | #1    | #2    |
-| :---:   | :---: | :---: |
-| Seconds | 301   | 283   |
+| Error| Solution    |
+| :---:   | :---: |
+| Connection timeout| Verify MT5 terminal is running|
+| "No deals in history" | Adjust date range in code |
+| Chart display issues | Refresh browser cache |
+| Missing dependencies	 | Reinstall requirements.txt
+ |
 
-
-Error	Solution
-Connection timeout	Verify MT5 terminal is running
-"No deals in history"	Adjust date range in code
-Chart display issues	Refresh browser cache
-Missing dependencies	Reinstall requirements.txt
 Debugging Tips
-Check terminal for Python errors
+1. Check terminal for Python errors
 
-Verify MT5 login credentials
+2. Verify MT5 login credentials
 
-Ensure correct terminal path format:
+3. Ensure correct terminal path format:
 
-Windows: C:/Program Files/MetaTrader 5/terminal64.exe
+   Windows: `C:/Program Files/MetaTrader 5/terminal64.exe`
 
-Linux/Mac: Use Wine-compatible path
+### Contributing
+We welcome contributions! Please follow these guidelines:
+
+1. Fork the repository
+
+2. Create a feature branch (git checkout -b feature/improvement)
+
+3. Commit changes (git commit -m 'Add new feature')
+
+4. Push to branch (git push origin feature/improvement)
+
+5. Open a Pull Request
