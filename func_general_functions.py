@@ -2,8 +2,6 @@ import MetaTrader5 as mt5
 from datetime import datetime, timedelta, timezone
 from func_general_functions import *
 import time
-from variables_general import *
-
 
 def retryable_initialize(max_retries, delay_seconds, terminal_path, current_pass, current_account, current_server):
     for attempt in range(1, max_retries + 1):
